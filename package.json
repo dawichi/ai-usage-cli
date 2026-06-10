@@ -1,0 +1,17 @@
+{
+  "name": "agent-usage-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-platform terminal dashboard for Claude Code and Codex usage windows.",
+  "type": "module",
+  "scripts": {
+    "start": "node usage-dashboard.mjs",
+    "once": "node usage-dashboard.mjs --once",
+    "watch": "node usage-dashboard.mjs --interval 60",
+    "json": "node usage-dashboard.mjs --once --json",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
