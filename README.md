@@ -22,6 +22,8 @@ The dashboard reads local machine state only:
 
 It does not make network requests, send telemetry, or require API keys of its own.
 
+The default terminal view does not print local filesystem paths, which makes it safer to screenshot or share.
+
 ## Requirements
 
 - Node.js 18 or newer
@@ -115,11 +117,13 @@ Project structure:
 - `usage-dashboard.mjs`: CLI entrypoint
 - `src/dashboard.mjs`: core logic, parsing, rendering, data collection
 - `tests/dashboard.test.mjs`: parser and rendering tests
+- `LICENSE`: MIT license
 
 ## Design Notes
 
 - Claude parsing is intentionally strict: if the CLI format changes in a way the parser cannot understand, the dashboard reports Claude as unavailable instead of showing misleading `n/a` values.
 - Codex lookup is optimized for recent history. It scans recent dated session folders and reads only the tail of candidate `.jsonl` files instead of loading the full history on every refresh.
+- JSON mode still includes the Codex `sourceFile` for debugging and scripting if you need to inspect where the snapshot came from.
 
 ## Privacy And Publishing
 
@@ -133,7 +137,7 @@ The code does not include:
 - copied Codex session files
 - copied Claude output snapshots
 
-The only potentially sensitive detail the app prints at runtime is the local path to the Codex session file used as the source. That is not committed to the repository. If you prefer, that line can be removed later for cleaner screenshots.
+The terminal UI avoids showing local path details. JSON mode still exposes the source path intentionally for debugging, but that data is generated at runtime and is not stored in the repository.
 
 ## Possible Next Steps
 

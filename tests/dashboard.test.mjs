@@ -59,6 +59,29 @@ test("parseClaudeUsage fails cleanly on changed output", () => {
   assert.match(result.error, /Could not parse usage line/);
 });
 
+test("parseClaudeUsage accepts valid lines without reset text", () => {
+  const output = [
+    "You are currently using your subscription to power your Claude Code usage",
+    "",
+    "Current session: 0% used",
+    "Current week (all models): 15% used · resets Jun 14 at 10pm (Europe/Madrid)",
+  ].join("\n");
+
+  assert.deepEqual(parseClaudeUsage(output), {
+    ok: true,
+    provider: "Claude",
+    primary: {
+      usedPercent: 0,
+      resetsAtText: null,
+    },
+    secondary: {
+      usedPercent: 15,
+      resetsAtText: "Jun 14 at 10pm (Europe/Madrid)",
+    },
+    raw: output,
+  });
+});
+
 test("extractCodexRateLimitsFromLines reads the newest rate_limits event", () => {
   const lines = [
     "{\"timestamp\":\"2026-06-10T12:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}",

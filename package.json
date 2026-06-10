@@ -2,7 +2,8 @@
   "name": "agent-usage-dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Cross-platform terminal dashboard for Claude Code and Codex usage windows.",
+  "description": "Small terminal dashboard for comparing remaining usage between Claude Code and Codex.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "node usage-dashboard.mjs",
@@ -13,5 +14,13 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "keywords": [
+    "claude",
+    "codex",
+    "dashboard",
+    "cli",
+    "usage",
+    "quota"
+  ]
 }

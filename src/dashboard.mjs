@@ -184,7 +184,7 @@ function normalizeClaudeLine(line, prefixPattern) {
   const usedMatch = line.match(/(\d+(?:\.\d+)?)%\s*used/i);
   const resetMatch = line.match(/resets?\s+(.+)$/i);
 
-  if (!usedMatch || !resetMatch) {
+  if (!usedMatch) {
     return {
       ok: false,
       raw: line,
@@ -195,7 +195,7 @@ function normalizeClaudeLine(line, prefixPattern) {
   return {
     ok: true,
     usedPercent: Number(usedMatch[1]),
-    resetsAtText: resetMatch[1],
+    resetsAtText: resetMatch?.[1] ?? null,
   };
 }
 
@@ -462,10 +462,6 @@ function renderProviderBlock(result) {
 
   if (result.planType) {
     lines.push(`  plan:   ${result.planType}`);
-  }
-
-  if (result.sourceFile) {
-    lines.push(`  source: ${result.sourceFile}`);
   }
 
   return lines;
