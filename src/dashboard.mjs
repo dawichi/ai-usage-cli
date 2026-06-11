@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_INTERVAL_SECONDS = 60;
 const RATE_LIMIT_SEARCH_FILE_LIMIT = 30;
 const RATE_LIMIT_TAIL_BYTES = 128 * 1024;
+const CLAUDE_HISTORY_MAX_AGE_MS = 30 * 60 * 1000;
 
 export function parseArgs(args) {
   const options = {
@@ -93,17 +94,52 @@ function formatPercent(value) {
   return `${Math.round(value)}%`;
 }
 
+const ERROR_MESSAGE_MAX_LENGTH = 160;
+
+function formatErrorMessage(error) {
+  if (!error) {
+    return "unknown error";
+  }
+
+  const collapsed = error
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
+
+  if (collapsed.length <= ERROR_MESSAGE_MAX_LENGTH) {
+    return collapsed;
+  }
+
+  return `${collapsed.slice(0, ERROR_MESSAGE_MAX_LENGTH - 1)}…`;
+}
+
+const BAR_WIDTH = 12;
+
+function formatBar(usedPercent) {
+  if (usedPercent == null || Number.isNaN(usedPercent)) {
+    return `[${" ".repeat(BAR_WIDTH)}]`;
+  }
+
+  const clamped = Math.max(0, Math.min(100, usedPercent));
+  const filled = Math.round((clamped / 100) * BAR_WIDTH);
+  const bar = `${"█".repeat(filled)}${"░".repeat(BAR_WIDTH - filled)}`;
+
+  return `[${color(bar, severityColor(usedPercent))}]`;
+}
+
 function formatWindow(window) {
   if (!window) {
     return "n/a";
   }
 
+  const bar = formatBar(window.usedPercent);
   const used = formatPercent(window.usedPercent);
   const remaining =
     window.usedPercent == null ? "n/a" : `${Math.max(0, 100 - Math.round(window.usedPercent))}%`;
   const reset = window.resetsAtText ?? "unknown";
   const duration = window.windowMinutes == null ? "unknown" : `${window.windowMinutes}m`;
-  return `${used} used | ${remaining} left | resets ${reset} | window ${duration}`;
+  return `${bar} ${used} used | ${remaining} left | resets ${reset} | window ${duration}`;
 }
 
 function formatAbsoluteDate(date) {
@@ -152,10 +188,29 @@ function withResetText(window) {
   }
 
   const resetDate = new Date(window.resetsAtEpochSeconds * 1000);
+  const isStale = resetDate.getTime() < Date.now();
+
   return {
     ...window,
-    resetsAtText: `${formatAbsoluteDate(resetDate)} (${formatRelative(resetDate)})`,
+    isStale,
+    resetsAtText: isStale
+      ? `${formatAbsoluteDate(resetDate)} (passed, window has likely reset)`
+      : `${formatAbsoluteDate(resetDate)} (${formatRelative(resetDate)})`,
   };
+}
+
+function formatSnapshotAge(observedAtIso) {
+  if (!observedAtIso) {
+    return null;
+  }
+
+  const observedAt = new Date(observedAtIso);
+
+  if (!Number.isFinite(observedAt.getTime())) {
+    return null;
+  }
+
+  return formatRelative(observedAt).replace(/ ago$/, "");
 }
 
 async function runCommand(command, commandArgs) {
@@ -253,11 +308,134 @@ export function parseClaudeUsage(output) {
   };
 }
 
+function withClaudeSource(result, observedAt) {
+  return {
+    ...result,
+    observedAt: observedAt?.toISOString?.() ?? null,
+    sourceDescription: observedAt
+      ? `recent Claude transcript from ${formatAbsoluteDate(observedAt)}`
+      : "recent Claude transcript",
+  };
+}
+
+async function findRecentFilesByMtime(rootDir, limit = RATE_LIMIT_SEARCH_FILE_LIMIT) {
+  const results = [];
+  let projectDirs;
+
+  try {
+    projectDirs = await fs.readdir(rootDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const projectDir of projectDirs) {
+    if (!projectDir.isDirectory()) {
+      continue;
+    }
+
+    const projectPath = path.join(rootDir, projectDir.name);
+    let entries;
+
+    try {
+      entries = await fs.readdir(projectPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+
+      const filePath = path.join(projectPath, entry.name);
+
+      try {
+        const stats = await fs.stat(filePath);
+        results.push({
+          filePath,
+          mtimeMs: stats.mtimeMs,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  results.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return results.slice(0, limit).map((entry) => entry.filePath);
+}
+
+function extractLocalCommandStdout(content) {
+  const match = content?.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/i);
+  return match?.[1]?.trim() ?? null;
+}
+
+async function getClaudeUsageFromHistory() {
+  const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
+  const files = await findRecentFilesByMtime(claudeProjectsDir);
+
+  for (const filePath of files) {
+    let lines;
+
+    try {
+      lines = await readTailLines(filePath);
+    } catch {
+      continue;
+    }
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let parsedLine;
+
+      try {
+        parsedLine = JSON.parse(lines[index]);
+      } catch {
+        continue;
+      }
+
+      if (parsedLine?.type !== "system" || parsedLine?.subtype !== "local_command") {
+        continue;
+      }
+
+      const stdout = extractLocalCommandStdout(parsedLine.content);
+
+      if (!stdout || !/^You are currently using your subscription/i.test(stdout)) {
+        continue;
+      }
+
+      const parsedUsage = parseClaudeUsage(stdout);
+
+      if (!parsedUsage.ok) {
+        continue;
+      }
+
+      const observedAt = parsedLine.timestamp ? new Date(parsedLine.timestamp) : null;
+
+      if (
+        observedAt &&
+        Number.isFinite(observedAt.getTime()) &&
+        Date.now() - observedAt.getTime() > CLAUDE_HISTORY_MAX_AGE_MS
+      ) {
+        continue;
+      }
+
+      return withClaudeSource(parsedUsage, observedAt);
+    }
+  }
+
+  return null;
+}
+
 export async function getClaudeUsage() {
   const claudeCommand = process.env.CLAUDE_CMD || "claude";
   const output = await runCommand(claudeCommand, ["-p", "/usage"]);
 
   if (typeof output !== "string") {
+    const fallback = await getClaudeUsageFromHistory();
+
+    if (fallback) {
+      return fallback;
+    }
+
     return {
       ok: false,
       provider: "Claude",
@@ -265,7 +443,19 @@ export async function getClaudeUsage() {
     };
   }
 
-  return parseClaudeUsage(output);
+  const parsed = parseClaudeUsage(output);
+
+  if (parsed.ok) {
+    return parsed;
+  }
+
+  const fallback = await getClaudeUsageFromHistory();
+
+  if (fallback) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function normalizeCodexWindow(window) {
@@ -366,12 +556,15 @@ export function extractCodexRateLimitsFromLines(lines) {
       continue;
     }
 
+    const observedAt = new Date(parsed?.timestamp);
+
     return {
       ok: true,
       provider: "Codex",
       primary: normalizeCodexWindow(rateLimits.primary),
       secondary: normalizeCodexWindow(rateLimits.secondary),
       planType: rateLimits.plan_type ?? null,
+      observedAt: Number.isFinite(observedAt.getTime()) ? observedAt.toISOString() : null,
     };
   }
 
@@ -447,7 +640,7 @@ function chooseRecommendation(claude, codex) {
 
 function renderProviderBlock(result) {
   if (!result.ok) {
-    return [color(`${result.provider}: unavailable`, 31), `  error: ${result.error}`];
+    return [color(`${result.provider}: unavailable`, 31), `  error: ${formatErrorMessage(result.error)}`];
   }
 
   const primaryColor = severityColor(result.primary?.usedPercent ?? 100);
@@ -464,12 +657,37 @@ function renderProviderBlock(result) {
     lines.push(`  plan:   ${result.planType}`);
   }
 
+  if (result.sourceDescription) {
+    lines.push(`  source: ${result.sourceDescription}`);
+  }
+
+  const staleWindows = [];
+
+  if (result.primary?.isStale) {
+    staleWindows.push("active");
+  }
+
+  if (result.secondary?.isStale) {
+    staleWindows.push("long");
+  }
+
+  if (staleWindows.length > 0) {
+    const age = formatSnapshotAge(result.observedAt);
+    const ageText = age ? `, data is ${age} old` : "";
+    lines.push(
+      color(
+        `  note:   ${staleWindows.join(" and ")} window reset time has passed${ageText} — run codex to refresh`,
+        33,
+      ),
+    );
+  }
+
   return lines;
 }
 
 export function renderScreen({ claude, codex, options, now = new Date() }) {
   const header = [
-    "Agent Usage Dashboard",
+    "AI Usage CLI",
     `Updated: ${formatAbsoluteDate(now)}`,
     `Refresh: every ${options.intervalSeconds}s`,
     chooseRecommendation(claude, codex),

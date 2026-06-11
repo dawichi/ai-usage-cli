@@ -1,4 +1,4 @@
-# Agent Usage Dashboard
+# AI Usage CLI
 
 Small dependency-free terminal dashboard for comparing remaining usage between Claude Code and Codex.
 
@@ -8,8 +8,9 @@ It is designed for a simple decision: which agent has more room left in the curr
 
 - Reads Claude usage from `claude -p /usage`
 - Reads Codex usage from recent session snapshots under `~/.codex/sessions`
-- Shows active and longer-window usage side by side
+- Shows active and longer-window usage side by side, with a progress bar per window
 - Recommends which provider currently has more active-window headroom
+- Flags Codex data as stale once its reported reset time has passed
 - Supports terminal mode and one-shot JSON output
 - Works with plain Node.js and no external packages
 
@@ -34,7 +35,7 @@ The default terminal view does not print local filesystem paths, which makes it 
 
 ```bash
 git clone <your-repo-url>
-cd agent-usage-dashboard
+cd ai-usage-cli
 npm start
 ```
 
@@ -74,19 +75,31 @@ node usage-dashboard.mjs --interval 60 --no-clear
 ## Example Output
 
 ```text
-Agent Usage Dashboard
+AI Usage CLI
 Updated: Jun 10, 2026, 02:14 PM
 Refresh: every 60s
 Prefer Codex right now based on the active window.
 
 Claude: 99% active window used
-  active: 99% used | 1% left | resets Jun 10 at 2:30pm (Europe/Madrid) | window unknown
-  long:   15% used | 85% left | resets Jun 14 at 10pm (Europe/Madrid) | window unknown
+  active: [███████████░] 99% used | 1% left | resets Jun 10 at 2:30pm (Europe/Madrid) | window unknown
+  long:   [██░░░░░░░░░░] 15% used | 85% left | resets Jun 14 at 10pm (Europe/Madrid) | window unknown
 
 Codex: 32% active window used
-  active: 32% used | 68% left | resets Jun 10, 2026, 05:51 PM (in 3h 37m) | window 300m
-  long:   5% used | 95% left | resets Jun 17, 2026, 12:51 PM (in 6d 22h 37m) | window 10080m
+  active: [████░░░░░░░░] 32% used | 68% left | resets Jun 10, 2026, 05:51 PM (in 3h 37m) | window 300m
+  long:   [█░░░░░░░░░░░] 5% used | 95% left | resets Jun 17, 2026, 12:51 PM (in 6d 22h 37m) | window 10080m
   plan:   plus
+```
+
+If the active window's reset time has already passed (Codex only updates its
+snapshot when you actually run `codex`), the dashboard shows that the window
+has likely reset and adds a note instead of a misleading "in the past" time:
+
+```text
+Codex: 3% active window used
+  active: [░░░░░░░░░░░░] 3% used | 97% left | resets Jun 11, 2026, 02:13 PM (passed, window has likely reset) | window 300m
+  long:   [███░░░░░░░░░] 23% used | 77% left | resets Jun 17, 2026, 12:51 PM (in 5d 17h 57m) | window 10080m
+  plan:   plus
+  note:   active window reset time has passed, data is 4h 41m old — run codex to refresh
 ```
 
 ## Environment Variables
@@ -123,6 +136,7 @@ Project structure:
 
 - Claude parsing is intentionally strict: if the CLI format changes in a way the parser cannot understand, the dashboard reports Claude as unavailable instead of showing misleading `n/a` values.
 - Codex lookup is optimized for recent history. It scans recent dated session folders and reads only the tail of candidate `.jsonl` files instead of loading the full history on every refresh.
+- Claude usage is read live on every refresh, so its reset times always reflect the current window. Codex usage comes from the last snapshot written to `~/.codex/sessions`, which can go stale if Codex hasn't been used recently — once a window's reset time has passed, the dashboard marks it as stale and reports the snapshot's age instead of a confusing "in the past" reset time.
 - JSON mode still includes the Codex `sourceFile` for debugging and scripting if you need to inspect where the snapshot came from.
 
 ## Privacy And Publishing
