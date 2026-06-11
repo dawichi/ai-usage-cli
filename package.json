@@ -1,10 +1,18 @@
 {
-  "name": "agent-usage-dashboard",
-  "version": "0.1.0",
-  "private": true,
+  "name": "ai-usage-cli",
+  "version": "0.1.2",
   "description": "Small terminal dashboard for comparing remaining usage between Claude Code and Codex.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "ai-usage-cli": "usage-dashboard.mjs"
+  },
+  "files": [
+    "src",
+    "usage-dashboard.mjs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node usage-dashboard.mjs",
     "once": "node usage-dashboard.mjs --once",
