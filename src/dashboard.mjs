@@ -481,7 +481,7 @@ async function listDirNames(dir) {
 
 async function findRecentJsonlFiles(rootDir, limit = RATE_LIMIT_SEARCH_FILE_LIMIT) {
   const years = (await listDirNames(rootDir)).sort().reverse();
-  const results = [];
+  const candidates = [];
 
   for (const year of years) {
     const yearDir = path.join(rootDir, year);
@@ -501,22 +501,34 @@ async function findRecentJsonlFiles(rootDir, limit = RATE_LIMIT_SEARCH_FILE_LIMI
           continue;
         }
 
-        const files = entries
-          .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-          .map((entry) => path.join(dayDir, entry.name))
-          .sort()
-          .reverse();
+        const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
 
-        results.push(...files);
+        for (const entry of files) {
+          const filePath = path.join(dayDir, entry.name);
 
-        if (results.length >= limit) {
-          return results.slice(0, limit);
+          try {
+            const stats = await fs.stat(filePath);
+            candidates.push({ filePath, mtimeMs: stats.mtimeMs });
+          } catch {
+            continue;
+          }
+        }
+
+        if (candidates.length >= limit) {
+          return sortByMtimeDesc(candidates, limit);
         }
       }
     }
   }
 
-  return results.slice(0, limit);
+  return sortByMtimeDesc(candidates, limit);
+}
+
+function sortByMtimeDesc(candidates, limit) {
+  return candidates
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, limit)
+    .map((entry) => entry.filePath);
 }
 
 async function readTailLines(filePath, maxBytes = RATE_LIMIT_TAIL_BYTES) {

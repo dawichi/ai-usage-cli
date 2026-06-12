@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   extractCodexRateLimitsFromLines,
+  getCodexUsage,
   parseArgs,
   parseClaudeUsage,
   renderScreen,
@@ -119,6 +123,57 @@ test("extractCodexRateLimitsFromLines marks a window as stale once its reset tim
   assert.equal(result?.primary?.isStale, true);
   assert.match(result?.primary?.resetsAtText, /passed, window has likely reset/);
   assert.equal(result?.secondary?.isStale, false);
+});
+
+test("getCodexUsage prefers the most recently modified session over the one with the latest filename", async () => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "codex-home-"));
+  const dayDir = path.join(codexHome, "sessions", "2026", "06", "11");
+  await fs.mkdir(dayDir, { recursive: true });
+
+  const staleFile = path.join(dayDir, "rollout-2026-06-11T21-23-43-stale.jsonl");
+  const activeFile = path.join(dayDir, "rollout-2026-06-11T09-13-00-active.jsonl");
+
+  const rateLimitLine = (timestamp, primaryUsedPercent, secondaryUsedPercent) =>
+    JSON.stringify({
+      timestamp,
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          primary: { used_percent: primaryUsedPercent, window_minutes: 300, resets_at: 1781222132 },
+          secondary: { used_percent: secondaryUsedPercent, window_minutes: 10080, resets_at: 1781693474 },
+          plan_type: "plus",
+        },
+      },
+    });
+
+  await fs.writeFile(staleFile, `${rateLimitLine("2026-06-11T19:26:37.013Z", 46, 47)}\n`);
+  await fs.writeFile(activeFile, `${rateLimitLine("2026-06-11T22:01:00.953Z", 100, 57)}\n`);
+
+  // The active session started earlier (sorts first alphabetically) but was
+  // written to most recently, so it should win on mtime.
+  const now = new Date();
+  await fs.utimes(staleFile, now, new Date(now.getTime() - 60 * 60 * 1000));
+  await fs.utimes(activeFile, now, now);
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+
+  try {
+    const result = await getCodexUsage();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.primary.usedPercent, 100);
+    assert.equal(result.secondary.usedPercent, 57);
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+
+    await fs.rm(codexHome, { recursive: true, force: true });
+  }
 });
 
 test("renderScreen notes stale Codex data instead of a misleading past reset time", () => {
