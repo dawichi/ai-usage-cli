@@ -1,6 +1,6 @@
 {
   "name": "ai-usage-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Small terminal dashboard for comparing remaining usage between Claude Code and Codex.",
   "license": "MIT",
   "type": "module",
